@@ -68,6 +68,18 @@
 
 ## Reproduce
 
-I have reproduced it as the Lab 1 of MIT 6.824. 
+This reproduce part is based on the Lab 1 of MIT 6.824. 
 
-1. 
+1. **Can the system compute reduce tasks while some map tasks are unfinished?**
+
+   All reduce tasks can begin only after all map tasks are done, since they may depend on those unfinished map tasks. So the whole process of computation can partition into two phase, the map computation part and the reduce computation part. 
+
+2. **How do we assign map tasks?**
+
+   Each worker will request for more map tasks when it becomes idle, and the master will assign files directly to them. 
+
+3. **How do we assign reduce tasks?**
+
+   When worker is notified that there is no more map tasks, they will begin to request for reduce tasks. This time, the master won't assign files directly, instead, master will only assign a number in the range from $0$ to $R-1$. Then each worker will try to read intermediate files from each workers according to its number automatically. 
+
+   This requires those map worker store there output in a previously agreed file name for reduce workers to request. 
