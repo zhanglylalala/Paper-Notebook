@@ -83,3 +83,11 @@ This reproduce part is based on the Lab 1 of MIT 6.824.
    When worker is notified that there is no more map tasks, they will begin to request for reduce tasks. This time, the master won't assign files directly, instead, master will only assign a number in the range from $0$ to $R-1$. Then each worker will try to read intermediate files from each workers according to its number automatically. 
 
    This requires those map worker store there output in a previously agreed file name for reduce workers to request. 
+   
+3. **When can workers stop requesting for more map tasks/reduce tasks?**
+Only after all map tasks is completed, workers can stop requesting for more map tasks and begin to request for reduce tasks. Also, only after all reduce tasks is completed, workers can stop requesting for more reduce tasks and quit the program. This is because those executing, yet uncompleted, tasks may fail, and when that happens, we need other workers to re-execute those tasks. 
+   
+Similarly, reduce workers cannot delete those intermediate files right after they read them. Because if they fail, their successor need to read those files. 
+
+# Experiments and results
+
