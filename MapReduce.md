@@ -85,9 +85,23 @@ This reproduce part is based on the Lab 1 of MIT 6.824.
    This requires those map worker store there output in a previously agreed file name for reduce workers to request. 
    
 3. **When can workers stop requesting for more map tasks/reduce tasks?**
-Only after all map tasks is completed, workers can stop requesting for more map tasks and begin to request for reduce tasks. Also, only after all reduce tasks is completed, workers can stop requesting for more reduce tasks and quit the program. This is because those executing, yet uncompleted, tasks may fail, and when that happens, we need other workers to re-execute those tasks. 
+   Only after all map tasks is completed, workers can stop requesting for more map tasks and begin to request for reduce tasks. Also, only after all reduce tasks is completed, workers can stop requesting for more reduce tasks and quit the program. This is because those executing, yet uncompleted, tasks may fail, and when that happens, we need other workers to re-execute those tasks. 
    
+
 Similarly, reduce workers cannot delete those intermediate files right after they read them. Because if they fail, their successor need to read those files. 
 
 # Experiments and results
 
+1. **What to notice when configurate cluster?**
+   - Need to reserve some memory for other tasks running on the cluster. The author reserved $1-1.5$ GB out of $4$ GB. 
+   - Best test when the CPUs, disks, and network were mostly idle. 
+2. The author tested two representative situations, grep and sort. 
+3. In the grep test, the execution time includes a minte of startup overhead over $150$ seconds of total time. The overhead is due to the propagation of the program to all worker machines, and delays interacting with GFS to open the set of input files and to get the information needed for the locality optimization. 
+4. In the sort test, 
+   - It only consists of less than $50$ lines of user code
+   - The entire computation time including startup overhead is similar to the best reported result at that time. 
+   - The author tested three kind of rates, the rate of reading by map workers (*input rate*), the rate of communicating intermediate files between map workers and reduce workers (*shuffle rate*), and the rate of writing output files by reduce workers (*output rate*). These are the I/O parts which affect the perfornmence significantly. 
+     - The input rate is less than for grep, because sort map tasks spend more time writing intermediate output to their local disks. 
+     - The input rate is higher than the shuffle rate and the output rate because of locality optimization. 
+     - The shuffle rate is higher than the output rate because the output phase writes replicas due to the mechanism for reliability  of the underlying file system. 
+   - The author also tested when $200$ out of $1746$ workers are killed several minutes. The underlying cluster scheduler immediately restarted new worker processes on these mechines (only the processes were killed, the machines were still functioning properly). The entire computation time increases of $5\%$ over the normal execution time. 
