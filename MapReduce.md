@@ -8,8 +8,9 @@
 ## Paper ideas
 
 1. **What does users need to do?**
+   
    - Users need to provide a Map function and a Reduce function. 
-
+   
    - Map function will read the original data as key-value pairs, take one pair as input each time, and output intermediate key-value pairs. 
      
      $map(k1,v1)\rightarrow list(k2,v2)$
@@ -18,8 +19,8 @@
      
      $reduce(k2,list(v2))\rightarrow list(v2)$
      
-   - When user need to implement the Mapper and Reducer as interface provided by the system, and pass to the MapReduce specification. After passing the input and output files, invoke the ``MapReduce`` function to execute. 
-
+   - Users need to implement the Mapper and Reducer as interface provided by the system, and pass to the MapReduce specification. After passing the input and output files, invoke the ``MapReduce`` function to execute. 
+   
 2. **What run-time system need to do?**
    - Partition data
 
@@ -43,12 +44,13 @@
 
    - Track the state of each map task and reduce task (idle, in-progress or completed), and the identity of the worker machine (for non-idle tasks). 
 
-   - $M$ is the number map tasks, while $R$ is the number of reduce tasks. The master must make $O(M+R)$, and keeps $O(M*R)$ state in memory (all map task/reduce task pair). 
+   - $M$ is the number map tasks, while $R$ is the number of reduce tasks. The master must make $O(M+R)$ scheduling decisions, and keeps $O(M*R)$ state in memory (all map task/reduce task pair). 
 
 5. **How to handle worker failure?**
+   
    - What kinds of worker failure need re-execution? 
-
-     - Any task in progress
+   
+     - Any tasks in progress
      
      - Completed map tasks also need to be re-executed, since their output is stored on the local disks and is inaccessible. 
      
@@ -62,6 +64,7 @@
 7. **How to partition reduce tasks?**
    The number of reduce tasks/output files ($R$) is specified by the users. The default partitioning uses hashing, namely partition according to $hash(key)\ mod\ R$. 
 8. **How to handle straggler problem?**
+   
    Straggler: a machine that takes an unusually long time to complete on of the last few map or reduce tasks. This may be caused by a bad disk, its scheduling system scheduling it a different other tasks. 
    
    So when a MapReduce operation is close to completion, the master schedules backup executions of the remaining in-progress tasks. 
@@ -85,10 +88,10 @@ This reproduce part is based on the Lab 1 of MIT 6.824.
    This requires those map worker store there output in a previously agreed file name for reduce workers to request. 
    
 3. **When can workers stop requesting for more map tasks/reduce tasks?**
+   
    Only after all map tasks is completed, workers can stop requesting for more map tasks and begin to request for reduce tasks. Also, only after all reduce tasks is completed, workers can stop requesting for more reduce tasks and quit the program. This is because those executing, yet uncompleted, tasks may fail, and when that happens, we need other workers to re-execute those tasks. 
    
-
-Similarly, reduce workers cannot delete those intermediate files right after they read them. Because if they fail, their successor need to read those files. 
+   Similarly, reduce workers cannot delete those intermediate files right after they read them. Because if they fail, their successor need to read those files. 
 
 # Experiments and results
 
@@ -96,7 +99,7 @@ Similarly, reduce workers cannot delete those intermediate files right after the
    - Need to reserve some memory for other tasks running on the cluster. The author reserved $1-1.5$ GB out of $4$ GB. 
    - Best test when the CPUs, disks, and network were mostly idle. 
 2. The author tested two representative situations, grep and sort. 
-3. In the grep test, the execution time includes a minte of startup overhead over $150$ seconds of total time. The overhead is due to the propagation of the program to all worker machines, and delays interacting with GFS to open the set of input files and to get the information needed for the locality optimization. 
+3. In the grep test, the execution time includes a minute of startup overhead over $150$ seconds of total time. The overhead is due to the propagation of the program to all worker machines, and delays interacting with GFS to open the set of input files and to get the information needed for the locality optimization. 
 
    <img src="imgs/MapReduce02.png" style="zoom: 33%;" />
 4. In the sort test, 
