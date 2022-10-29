@@ -97,6 +97,8 @@ Similarly, reduce workers cannot delete those intermediate files right after the
    - Best test when the CPUs, disks, and network were mostly idle. 
 2. The author tested two representative situations, grep and sort. 
 3. In the grep test, the execution time includes a minte of startup overhead over $150$ seconds of total time. The overhead is due to the propagation of the program to all worker machines, and delays interacting with GFS to open the set of input files and to get the information needed for the locality optimization. 
+
+   <img src="imgs/MapReduce02.png" style="zoom: 33%;" />
 4. In the sort test, 
    - It only consists of less than $50$ lines of user code
    - The entire computation time including startup overhead is similar to the best reported result at that time. 
@@ -105,3 +107,6 @@ Similarly, reduce workers cannot delete those intermediate files right after the
      - The input rate is higher than the shuffle rate and the output rate because of locality optimization. 
      - The shuffle rate is higher than the output rate because the output phase writes replicas due to the mechanism for reliability  of the underlying file system. 
    - The author also tested when $200$ out of $1746$ workers are killed several minutes. The underlying cluster scheduler immediately restarted new worker processes on these mechines (only the processes were killed, the machines were still functioning properly). The entire computation time increases of $5\%$ over the normal execution time. 
+   
+   <img src="imgs/MapReduce03.png" style="zoom:50%;" />
+
