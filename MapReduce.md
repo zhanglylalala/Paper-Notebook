@@ -73,25 +73,23 @@
 
 This reproduce part is based on the Lab 1 of MIT 6.824. 
 
-1. **Can the system compute reduce tasks while some map tasks are unfinished?**
-
-   All reduce tasks can begin only after all map tasks are done, since they may depend on those unfinished map tasks. So the whole process of computation can partition into two phase, the map computation part and the reduce computation part. 
-
-2. **How do we assign map tasks?**
+1. **How do we assign map tasks?**
 
    Each worker will request for more map tasks when it becomes idle, and the master will assign files directly to them. 
 
-3. **How do we assign reduce tasks?**
+2. **How do we assign reduce tasks?**
 
    When worker is notified that there is no more map tasks, they will begin to request for reduce tasks. This time, the master won't assign files directly, instead, master will only assign a number in the range from $0$ to $R-1$. Then each worker will try to read intermediate files from each workers according to its number automatically. 
 
-   This requires those map worker store there output in a previously agreed file name for reduce workers to request. 
-   
+   This requires those map workers store their output in a previously agreed file name for reduce workers to request. 
+
 3. **When can workers stop requesting for more map tasks/reduce tasks?**
-   
-   Only after all map tasks is completed, workers can stop requesting for more map tasks and begin to request for reduce tasks. Also, only after all reduce tasks is completed, workers can stop requesting for more reduce tasks and quit the program. This is because those executing, yet uncompleted, tasks may fail, and when that happens, we need other workers to re-execute those tasks. 
-   
-   Similarly, reduce workers cannot delete those intermediate files right after they read them. Because if they fail, their successor need to read those files. 
+
+   - Only after all map tasks is completed, workers can stop requesting for more map tasks and begin to request for reduce tasks, since reduce tasks may depend on those unfinished map tasks. So the lifecycle of workers can be partitioned into two phase, the map phase and the reduce phase.
+
+   - Also, only after all reduce tasks is completed, workers can stop requesting for more reduce tasks and quit the program. This is because those executing, yet uncompleted, tasks may fail, and when that happens, we need other workers to re-execute those tasks. 
+
+   - Similarly, reduce workers cannot delete those intermediate files right after they read them. Because if they fail, their successor need to read those files. 
 
 # Experiments and results
 
