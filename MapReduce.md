@@ -38,7 +38,7 @@
    
    Master tries to make most of the ``(3) read`` run locally. In the ``(5) remote read``, network communication is inevitable. 
    
-   <img src="imgs/MapReduce01.png" style="zoom: 50%;" />
+   <img src="imgs/MapReduce/01.png" style="zoom: 50%;" />
 4. **What does master need to do?**
    - Master pings every worker periodically, and marks those no response in a certain amount of time as failed. 
 
@@ -101,7 +101,7 @@ This reproduce part is based on the Lab 1 of MIT 6.824.
 2. The author tested two representative situations, grep and sort. 
 3. In the grep test, the execution time includes a minute of startup overhead over $150$ seconds of total time. The overhead is due to the propagation of the program to all worker machines, and delays interacting with GFS to open the set of input files and to get the information needed for the locality optimization. 
 
-   <img src="imgs/MapReduce02.png" style="zoom: 33%;" />
+   <img src="imgs/MapReduce/02.png" style="zoom: 33%;" />
 4. In the sort test, 
    - It only consists of less than $50$ lines of user code
    - The entire computation time including startup overhead is similar to the best reported result at that time. 
@@ -111,5 +111,5 @@ This reproduce part is based on the Lab 1 of MIT 6.824.
      - The shuffle rate is higher than the output rate because the output phase writes replicas due to the mechanism for reliability  of the underlying file system. 
    - The author also tested when $200$ out of $1746$ workers are killed several minutes. The underlying cluster scheduler immediately restarted new worker processes on these mechines (only the processes were killed, the machines were still functioning properly). The entire computation time increases of $5\%$ over the normal execution time. 
    
-   <img src="imgs/MapReduce03.png" style="zoom:50%;" />
+   <img src="imgs/MapReduce/03.png" style="zoom:50%;" />
 
