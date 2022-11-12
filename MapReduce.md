@@ -1,4 +1,8 @@
-[toc]
+* [Purpose](#purpose)
+* [Model](#model)
+   * [Paper ideas](#paper-ideas)
+   * [Reproduce](#reproduce)
+* [Experiments and results](#experiments-and-results)
 
 # Purpose
 
