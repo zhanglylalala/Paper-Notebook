@@ -1,3 +1,5 @@
+[toc]
+
 # Purpose
 
 1. Issues: Hard to parallel computation, distribute data, and handle server failures
@@ -21,15 +23,16 @@
      
    - Users need to implement the Mapper and Reducer as interface provided by the system, and pass to the MapReduce specification. After passing the input and output files, invoke the ``MapReduce`` function to execute. 
    
-2. **What run-time system need to do?**
+2. **What does run-time system need to do?**
+   
    - Partition data
-
+   
    - Schedule across a set of machines
-
+   
    - Handle machine failures
-
+   
    - Manage inter-machine communication. 
-
+   
 3. **How does the system run?** 
    
    When the ``MapReduce`` function is invoked, one **master** process and several **worker** processes will be forked. 
