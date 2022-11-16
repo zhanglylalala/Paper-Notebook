@@ -89,11 +89,103 @@
 
 ### Consistency
 
+1. **How do we define a file region being consistent or defined?**
+   - A file region is consistent if all clients will always see the same data, regardless of which replicas they read from. 
+   - A region is defined after a file data mutation if it is consistent and clients will see what the mutation writes in its entirety. 
+   - Concurrent successful mutations leave the region undefined but consistent: all clients see the same data, but it may not reflect what any one mutation has written. Typically, it consists of mingled fragments from multiple mutations. 
+2. **How many consistency rules should be considered?**
+   - File namespace mutations (e.g. file creation) are atomic. 
+   - After a sequence of successful mutations, the mutated file region is guaranteed to be defined and contain the data written by the last mutation. 
+3. **How do GFS guarantees the second rule?**
+   - Applying mutations to a chunk in the same order on all its replicas. 
+   - Using chunk version numbers to detect any replica that has become stale because it has missed mutations while its chunkserver was down. 
+   - Stale replicas will never be involved in a mutation or given to clients asking the master for chunk locations. They are garbage collected at the earliest opportunity. 
+4. **What is the side-effect of clients caching chunk locations?**
+   - They may read from a stale replica before that information is refreshed.  
+   - This window is limited by the cache entry's timeout and dthe next open of the file. 
+   - As most of files are append-only, a stale replica usually returns a premature end of chunk rather than outdated data. 
 
+### Write and record append
 
+1. **What is the difference between write and record append?**
+   - A write causes data to be written at an application-specified file offset. 
+   - A record append causes data (the “record”) to be appended atomically at least once even in the presence of concurrent mutations, but at an offset of GFS’s choosing. 
+     - The offset is returned to the client and marks the beginning of a defined region that contains the record. 
+     - GFS may insert padding or record duplicates in between. They occupy regions considered to be inconsistent and are typically dwarfed by the amount of user data. 
+   - A “regular” append is merely a write at an offset that the client believes to be the current end of file. 
+2. **How does typical writing happen?**
+   - A writer generates a file from beginning to end. It atomically renames the file to a permanent name after writing all the data, or periodically checkpoints how much has been successfully written. 
+   - Checkpoints may also include application-level check- sums. Readers verify and process only the file region up to the last checkpoint, which is known to be in the defined state. 
+   - Checkpointing allows writers to restart incrementally and keeps readers from processing successfully written file data that is still incomplete. 
+3. **How does readers deal with occasional padding and duplicates?**
+   - Each record prepared by the writer contains extra information like checksums so that its validity can be verified. 
+   - A reader can identify and discard extra padding and record fragments using the checksums. 
+   - If it cannot tolerate the occasional duplicates, it can filter them out using unique identifiers in the records, which are often needed anyway to name corresponding application entities such as web documents. 
 
+## Data mutation
 
+### Control & data flow
 
+1. **How do we minimize management overhead at the master of data mutation?**
+
+   - We use leases to maintain a consistent mutation order across replicas. 
+   - The master grants a chunk lease to one of the replicas, which we call the primary. The primary picks a serial order for all mutations to the chunk. All replicas follow this order when applying mutations. 
+   - The client caches who is the lease of a certain chunk for future mutations. It needs to contact the master again only when the primary becomes unreachable or replies that it no longer holds a lease. 
+
+2. **What does leases change?**
+
+   - A lease has an initial timeout of 60 seconds. However, as long as the chunk is being mutated, the primary can request and typically receive extensions from the master indefinitely. 
+   - These extension requests and grants are piggybacked on the HeartBeat messages regularly exchanged between the master and all chunkservers. 
+   - The master may sometimes try to revoke a lease before it expires (e.g., when the master wants to disable mutations on a file that is being renamed). 
+   - Even if the master loses communication with a primary, it can safely grant a new lease to another replica after the old lease expires. 
+
+3. **How does the control flow?**
+
+   - In step 1, the client asks the master which chunkserver holds the current lease for the chunk and the locations of the other replicas. If no one has a lease, the master grants one to a replica it chooses
+   - In step 2, the master replies with the identity of the primary and the locations of the other (secondary) replicas. 
+   - In step 3, The client pushes the data to all the replicas in any order, instead of only sending to the lease. 
+   - In step 4, once all the replicas have acknowledged receiving the data, the client sends a write request to the primary. 
+   - In step 5, the primary forwards the write request to all sec- ondary replicas. 
+   - In step 6, the secondaries all reply to the primary indicating that they have completed the operation. 
+   - In step 7, the primary replies to the client. Any errors encoun- tered at any of the replicas are reported to the client. 
+
+   <img src="imgs/GFS/02.png" style="zoom:25%;" />
+
+4. **How does primary and secondary servers write data?**
+
+   - Each chunkserver will store the data from client in an internal LRU buffer cache until the data is used or aged out. 
+   - The write request from client to primary identifies the data pushed earlier to all of the replicas. 
+   - The primary assigns consecutive serial numbers to all the mutations it receives, possibly from multiple clients, which provides the necessary serialization. 
+   - The primary applies the mutation to its own local state in serial number order. 
+
+5. **What would the system do if write fails?**
+
+   - If it had failed at the primary, it would not have been assigned a serial number and forwarded. 
+   - In other cases, the write may have succeeded at the primary and an arbitrary subset of the secondary replicas. The client request is considered to have failed, and the modified region is left in an inconsistent state. 
+   - The client code handles such errors by retrying the failed mutation. It will make a few attempts at steps 3 through 7 before falling back to a retry from the beginning of the write. 
+
+6. **What if a write is large or straddles a chunk boundary?**
+
+   - GFS client code breaks it down into multiple write operations. 
+   - They all follow the control flow described above but may be interleaved with and overwritten by concurrent operations from other clients. 
+   - The shared file region may end up containing fragments from different clients, although the replicas will be identical because the individual operations are completed successfully in the same order on all replicas. 
+
+7. **How to prevent primary become bottleneck of pushing data?**
+
+   - While control flows from the client to the primary and then to all secondaries, data is pushed linearly along a carefully picked chain of chunkservers in a pipelined fashion. 
+   - By decoupling the data flow from the control flow, we can improve performance by scheduling the expensive data flow based on the network topology regardless of which chunkserver is the primary. 
+   - Our goals are to fully utilize each machine’s network bandwidth, avoid network bottlenecks and high-latency links, and minimize the latency to push through all the data. 
+   - Each machine forwards the data to the “closest” machine in the network topology that has not received it. 
+   - Our network topology is simple enough that “distances” can be accurately estimated from IP addresses.
+
+8. **How to minimize latency of pushing data?**
+
+   - We minimize latency by pipelining the data trans- fer over TCP connections. Once a chunkserver receives some data, it starts forwarding immediately. 
+   - Pipelining is especially helpful to us because we use a switched network with full-duplex links. Sending the data immediately does not reduce the receive rate. 
+
+### Atomic record appends
+
+1. 
 
 
 
