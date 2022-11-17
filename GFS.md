@@ -24,19 +24,12 @@
 
 <img src="imgs/GFS/01.png" style="zoom:33%;" />
 
-1. Consist of a signle *master* and multiple *chunkservers* and is accessed by multiple *clients*. 
-
-2. Files are divided into fixed-size chunks. Each chunk is identified by an immutable and globally unique 64 bit *chunk handle* assigned by the master at the timeof chunk creation. 
-
-   Chunkservers store chunks on local disks as Linux files and read or write chunk data specified by a chunk handle and byte range. 
-
-   Each chunk is replicated on multiple chunkservers, three by default. 
-
-6. Neither the client nor the chunkserver caches file data. Caches offer little benefit while causing coherence issues. But clients do cache metadata. 
-
-#### Master
-
-1. **What does master need to do?**
+1. **What does the system consist of?**
+    - Consist of a signle *master* and multiple *chunkservers* and is accessed by multiple *clients*. 
+    - Files are divided into fixed-size chunks. Each chunk is identified by an immutable and globally unique 64 bit *chunk handle* assigned by the master at the timeof chunk creation. 
+    - Chunkservers store chunks on local disks as Linux files and read or write chunk data specified by a chunk handle and byte range. Each chunk is replicated on multiple chunkservers, three by default. 
+    - Neither the client nor the chunkserver caches file data. Caches offer little benefit while causing coherence issues. But clients do cache metadata. 
+2. **What does master need to do?**
    - The master maintains all file system metadata, and controls system-wide activities. 
 
      - Metadata includes namespace, access control information, the mapping from files to chunks, and the current locations of chunks. 
@@ -44,46 +37,17 @@
      - System-wide activities includes chunk lease management, garbage collection of orphaned chunks, and chunk migration between chunkservers. 
    - The master periodically comminicates with each chunkserver in HeartBeat messages to give it instructions and collect its state. 
    - Clients interact with the master for metadata operations, but all data-bearing communication goes directly to the chunkservers. 
-2. **How to prevent the master become a bottleneck?**
+3. **How to prevent the master becoming a bottleneck?**
    - The idea is to minimize its involvement in reads and writes. 
    - A client asks the master which chunkservers it should contact, and caches this information for a limited time and interacts with the chunkservers directly for subsequent operations. 
-3. **How does client communicate with master specifically?**
-   - The client translates the file name and byte offset specified by the application into a chunk index within the file. 
-   - It sends the master a requeust containing the file name and chunk index. 
-   - The master replies with the corresponding chunk handle and locations of the replicas. 
-   - The client caches this information using the file name and chunk index as the key. 
-4. **What metadata does master need to store?**
-   - Stored persistently: the file and chunk namespace, the mapping from files to chunks
-     - The master will scan periodically through its entire state in the background
-     - Periodic scanning is to implement chunk garbage collection, re-replication in the presence of chunkserver failures, and chunk migration to balance load and disk space usage across chunkservers. 
-     - The number of chunks and hence the capacity of the whole system is limited by how much memory the master has. But not a serious limitation for less than $64$ bytes of metadata for each chunk. 
-   - No need to store persistently: the locations of each chunk's replicas. 
-     - The master asks each chunkserver about its chunks at master startup and whenever a chunkserver joins the cluster. 
-     - The master can keep itself up-to-date thereafter because it controls all chunk placement and monitors chunkserver status. 
-   - Operation record
-     - The namespace and mapping are kept persistent by logging mutations to operation log
-     - It is stored on the master's local disk and replicated on remote machines
-5. **How does master persist?**
-   - Operation log
-     - The operation log contains a historical record of critical metadata changes. Not only is it the only persistent record of critical metadata, it also serves as a logical time line that defines the order of concurrent operations. 
-     - The system respond to a client operation only after flushing the corresponding log record to disk both locally and remotely. 
-     - The master batches several log records together before flushing thereby reducing the impact of flushing and replication on overall system thoughput. 
-   - Checkpoint
-     - To minimize startup time, we must keep the log small. The master checkpoints its state whenever the log grows beyond a certain size. It can recover by loading the latest checkpoint and replaying only the records after that. 
-     - The checkpoint is in a compact B-tree like form. 
-     - The master switches to a new log file and creates the new checkpoint in a separate thread. 
-     - Older checkpoints and log files can be freely deleted, though we keep a few around to guard against catastrophes. A failure during checkpointing does not affect correctness because the recovery code detects and skips incomplete checkpoints. 
-
-#### Chunk size
-
-1. **What is the advantage of large chunk size?**
+4. **What is the advantage of large chunk size?**
    - Reduce clients' need to interact with the master because reads and writes on the same chunk require only one initial request to the master for chunk location information. 
    - Reduce network overhead by keeping a persistent TCP connection to the chunkserver over an extended period of time. 
    - Reduce the size of the metadata stored on the master. 
-2. **What is the disadvantage of large chunk size?**
+5. **What is the disadvantage of large chunk size?**
    - Wasting space due to internal fragmentation. This can be eased through lazy space allocation. 
    - A small file consists of a small number of chunks, perhaps just one. The chunkservers storing those chunks may become hot spots if many clients are accessing the same file. This have not been a major issue. 
-3. **When will hot spots problem emerge?**
+6. **When will hot spots problem emerge?**
    - A more common case is that an executable was written to GFS as a single-chunk file and then started on hundreds of machines at the same time. 
    - We can fix this problem by storing such executables with a higher replication factor. 
 
@@ -185,9 +149,71 @@
 
 ### Atomic record appends
 
-1. 
+1. **What if appending causes the current chunk to exceed the maximum size?**
+   - The primary checks to see if appending the record to the current chunk would cause the chunk to exceed the maximum size. 
+   - If so, it pads the chunk to the maximum size, tells secondaries to do the same, and replies to the client indicating that the operation should be retried on the next chunk. 
+   - If the record fits within the maximum size, which is the common case, the primary appends the data to its replica, tells the secondaries to write the data at the exact offset where it has, and finally replies success to the client. 
+2. **What if appending fails at some chunkservers?**
+   - Replicas of the same chunk may contain different data possibly including duplicates of the same record in whole or in part. 
+   - GFS does not guarantee that all replicas are bytewise identical. It only guarantees that the data is written at least once as an atomic unit. 
+   - If there is any secondary chunkserver that can successfully append the record, the primary is succeed. Next time, the primary can choose an offset after the failed record. 
+   - Hence, after this, all replicas are at least as long as the end of record and therefore any future record will be assigned a higher offset or a different chunk even if a different replica later becomes the primary. 
 
+### Snapshot
 
+1. **What does snapshot do?**
+   - The snapshot operation makes a copy of a file or a directory tree (the “source”) almost instantaneously, while minimizing any interruptions of ongoing mutations. 
+   - Users use it to quickly create branch copies of huge data sets (and often copies of those copies, recursively), or to checkpoint the current state before experimenting with changes that can later be committed or rolled back easily. 
+2. **How does snapshot be implemented?**
+   - It use standard copy-on-write techniques. 
+   - Master revokes leases on the chunks in the files it is about to snapshot. 
+     - This ensures that any subsequent writes to these chunks will require an interaction with the master to find the lease holder. 
+     - And this will give the master an opportunity to create a new copy of the chunk first.
+   - Master logs the operation to disk. 
+   - It then applies this log record to its in-memory state by duplicating the metadata for the source file or directory tree. The newly created snapshot files point to the same chunks as the source files. 
+3. **How does clients write a chunk after snapshot?**
+   - The first time a client wants to write to a chunk C after the snapshot operation, it sends a request to the master to find the current lease holder. 
+   - The master notices that the reference count for chunk C is greater than one. It defers replying to the client request and instead picks a new chunk handle C’. 
+   - It then asks each chunkserver that has a current replica of C to create a new chunk called C’. 
+   - By creating the new chunk on the same chunkservers as the original, we ensure that the data can be copied locally, not over the network. 
+   - The master grants one of the replicas a lease on the new chunk C’ and replies to the client, which can write the chunk normally. 
+
+## Master
+
+1. **How does client communicate with master specifically?**
+   - The client translates the file name and byte offset specified by the application into a chunk index within the file. 
+   - It sends the master a requeust containing the file name and chunk index. 
+   - The master replies with the corresponding chunk handle and locations of the replicas. 
+   - The client caches this information using the file name and chunk index as the key. 
+2. **What metadata does master need to store?**
+   - Stored persistently: the file and chunk namespace, the mapping from files to chunks
+     - The master will scan periodically through its entire state in the background
+     - Periodic scanning is to implement chunk garbage collection, re-replication in the presence of chunkserver failures, and chunk migration to balance load and disk space usage across chunkservers. 
+     - The number of chunks and hence the capacity of the whole system is limited by how much memory the master has. But not a serious limitation for less than $64$ bytes of metadata for each chunk. 
+   - No need to store persistently: the locations of each chunk's replicas. 
+     - The master asks each chunkserver about its chunks at master startup and whenever a chunkserver joins the cluster. 
+     - The master can keep itself up-to-date thereafter because it controls all chunk placement and monitors chunkserver status. 
+   - Operation record
+     - The namespace and mapping are kept persistent by logging mutations to operation log
+     - It is stored on the master's local disk and replicated on remote machines
+3. **How to persist?**
+   - Operation log
+     - The operation log contains a historical record of critical metadata changes. Not only is it the only persistent record of critical metadata, it also serves as a logical time line that defines the order of concurrent operations. 
+     - The system respond to a client operation only after flushing the corresponding log record to disk both locally and remotely. 
+     - The master batches several log records together before flushing thereby reducing the impact of flushing and replication on overall system thoughput. 
+   - Checkpoint
+     - To minimize startup time, we must keep the log small. The master checkpoints its state whenever the log grows beyond a certain size. It can recover by loading the latest checkpoint and replaying only the records after that. 
+     - The checkpoint is in a compact B-tree like form. 
+     - The master switches to a new log file and creates the new checkpoint in a separate thread. 
+     - Older checkpoints and log files can be freely deleted, though we keep a few around to guard against catastrophes. A failure during checkpointing does not affect correctness because the recovery code detects and skips incomplete checkpoints. 
+4. **How does GFS manage namespace?**
+   - GFS does not have a per-directory data structure that lists all the files in that directory. Nor does it support aliases for the same file or directory. 
+   - GFS logically represents its namespace as a lookup table mapping full pathnames to metadata. With prefix compression, this table can be efficiently represented in memory. 
+   - Each node in the namespace tree (either an absolute file name or an absolute directory name) has an associated read-write lock. 
+5. **How does GFS design locking scheme?**
+   - If a master operation involves a certain file or directory, it will acquire read-locks on all the parent directories, and either a read-lock or a write-lock on the leaf file or directory that it will operate directly. 
+   - File creation does not require a write lock on the parent directory because there is no "directory", or inode-like, data structure to be protected from modification. 
+   - This locking scheme allows concurrent mutations in the same directory. 
 
 
 
