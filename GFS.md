@@ -180,6 +180,8 @@
 
 ## Master
 
+### Basic operations
+
 1. **How does client communicate with master specifically?**
    - The client translates the file name and byte offset specified by the application into a chunk index within the file. 
    - It sends the master a requeust containing the file name and chunk index. 
@@ -214,6 +216,62 @@
    - If a master operation involves a certain file or directory, it will acquire read-locks on all the parent directories, and either a read-lock or a write-lock on the leaf file or directory that it will operate directly. 
    - File creation does not require a write lock on the parent directory because there is no "directory", or inode-like, data structure to be protected from modification. 
    - This locking scheme allows concurrent mutations in the same directory. 
+
+### Replica management
+
+1. **How to place replicas?**
+   - There are two purposes: maximize data reliability and availability, and maximize net- work bandwidth utilization. 
+   - It is not enough to spread replicas across machines, which only guards against disk or machine failures and fully utilizes each machine’s network bandwidth. 
+   - We must also spread chunk replicas across racks. This ensures that some replicas of a chunk will survive and remain available even if an entire rack is damaged or offline. It also means that traffic, especially reads, for a chunk can exploit the aggre- gate bandwidth of multiple racks. 
+   - On the other hand, write traffic has to flow through multiple racks, a tradeoff we make willingly. 
+   - An even safer way is to spread across data centers in different cities. It can guards against a city-level catastrophe. 
+2. **What factors are considered when create a new chunk?**
+   - We want to place new replicas on chunkservers with below-average disk space utilization. Over time this will equalize disk utilization across chunkservers. 
+   - We want to limit the number of “recent” creations on each chunkserver. Although creation itself is cheap, it reliably predicts immi- nent heavy write traffic because chunks are created when de- manded by writes. 
+   - We want to spread replicas of a chunk across racks. 
+3. **What if the number of available replicas of a chunk falls below a user-specified goal?**
+   - The master would re-replicate the chunk. 
+   - If there are many chunks below their goal, the master picks the highest priority chunk considering some factors and “clones” it by instructing some chunkserver to copy the chunk data directly from an existing valid replica. 
+     - How far it is from its replication goal. 
+     - Prefer to first re-replicate chunks for live files as opposed to chunks that belong to re- cently deleted files. 
+     - To minimize the impact of failures on running applications, we boost the priority of any chunk that is blocking client progress. 
+4. **What if cloning traffic from overwhelming client traffic?**
+   - The master limits the numbers of active clone operations both for the cluster and for each chunkserver. 
+   - Each chunkserver limits the amount of bandwidth it spends on each clone operation by throttling its read requests to the source chunkserver.
+5. **How to keep the placement of replicas in balance?**
+   - It examines the current replica distribution and moves replicas for better disk space and load balancing. 
+   - The master gradually fills up a new chunkserver rather than instantly swamps it with new chunks and the heavy write traffic that comes with them. 
+   - The master must also choose which existing replica to remove. It prefers to remove those on chunkservers with below-average free space. 
+
+### Deletion
+
+1. **How to delete a file?**
+   - GFS does not immediately reclaim the available physical storage, it is just renamed to a hidden name that includes the deletion timestamp. It does so only lazily during regular garbage collection at both the file and chunk levels. 
+   - During the master’s regular scan of the file system namespace, it removes any such hidden files if they have existed for more than three days (the interval is configurable). 
+     - Until then, the file can still be read under the new, special name and can be undeleted by renaming it back to normal. 
+     - When the hidden file is removed from the namespace, its in-memory metadata is erased. This effectively severs its links to all its chunks.
+   - In a similar regular scan of the chunk namespace, the master identifies orphaned chunks (i.e., those not reachable from any file) and erases the metadata for those chunks. 
+     - In a HeartBeat message exchanged with the master, each chunkserver reports a subset of the chunks it has, and the master replies with the identity of all chunks that are no longer present in the master’s metadata. 
+     - The chunkserver is free to delete its replicas of such chunks. 
+2. **What are the advantages and disadvantages of lazy deletion over eager deletion?**
+   - It is simple and reliable in a large-scale distributed system where component failures are common. 
+   - It merges storage reclamation into the regular background activities of the master. 
+   - The delay in reclaiming storage provides a safety net against accidental, irreversible deletion. 
+   - The delay sometimes hinders user effort to fine tune usage when storage is tight. 
+   - Applications that repeatedly create and delete temporary files may not be able to reuse the storage right away. 
+3. **How to address the issues of reusing?**
+   - Expediting storage recla- mation if a deleted file is explicitly deleted again. 
+   - Allow users to apply different replication and reclamation policies to different parts of the namespace. 
+4. **How to handle the possible stale replicas?**
+   - For each chunk, the master maintains a chunk version number to distinguish between up-to-date and stale replicas. 
+   - Whenever the master grants a new lease on a chunk, it increases the chunk version number and informs the up-to- date replicas. This occurs before any client is notified and therefore before it can start writing to the chunk. 
+   - If one replica is currently unavailable, its chunk version number will not be advanced. The master will detect that this chunkserver has a stale replica when the chunkserver restarts and reports its set of chunks and their associated version numbers. 
+   - The master removes stale replicas in its regular garbage collection. Before that, it effectively considers a stale replica not to exist at all when it replies to client requests for chunk information. 
+   - The master includes the chunk version number when it informs clients which chunkserver holds a lease on a chunk or when it instructs a chunkserver to read the chunk from another chunkserver in a cloning operation. 
+
+## Fault tolerance
+
+
 
 
 
