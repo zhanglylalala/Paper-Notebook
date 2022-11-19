@@ -271,6 +271,51 @@
 
 ## Fault tolerance
 
+1. **How to handle master failure?**
+
+   - The master state is replicated for reliability. 
+     - When it fails, it can restart almost instantly. 
+     - When its machine or disk fails, monitoring infrastructure outside GFS starts a new master process elsewhere with the replicated operation log. 
+     - Clients use only the canonical name of the master, which is a DNS alias that can be changed if the master is relocated to another machine.
+   - “Shadow” masters provide read-only access to the file system even when the primary master is down. 
+     - They enhance read availability for files that are not being actively mutated or applications that do not mind getting slightly stale results. 
+     - Since file content is read from chunkservers, appli- cations do not observe stale file content. What could be stale within short windows is file metadata. 
+     - To keep itself informed, a shadow master reads a replica of the growing operation log and applies the same sequence of changes to its data structures exactly as the primary does.
+     - It depends on the primary master only for replica location updates resulting from the primary’s decisions to create and delete replicas.
+
+2. **Why cannot recover data using other chunk replicas? Why each chunkserver must independently verify the integrity?**
+
+   - It would be impractical to detect corruption by comparing replicas across chunkservers. 
+   - Divergent replicas may be legal: the semantics of GFS mutations, in particular atomic record append, does not guar- antee identical replicas. 
+
+3. **How to ensure data integrity?**
+
+   - Each chunkserver uses checksumming to detect corruption of stored data. A chunk is broken up into 64 KB blocks. Each has a corre- sponding 32 bit checksum. 
+   - Checksums are kept in memory and stored persistently with logging, separate from user data. 
+   - During idle periods, chunkservers can scan and verify the contents of inactive chunks. 
+
+4. **How to read data with checksum?**
+
+   - the chunkserver verifies the checksum of data blocks that overlap the read range before returning any data to the requester, whether a client or another chunkserver. 
+
+   - If a block does not match the recorded checksum, the chunkserver returns an error to the requestor and reports the mismatch to the master. 
+   - In response, the requestor will read from other replicas, while the master will clone the chunk from another replica. 
+   - After a valid new replica is in place, the master instructs the chunkserver that reported the mismatch to delete its replica. 
+
+5. **How to write data with checksum?**
+
+   - For writes that append to the end of a chunk, we just incrementally update the check- sum for the last partial checksum block, and compute new checksums for any brand new checksum blocks filled by the append. 
+     - Even if the last partial checksum block is already corrupted and we fail to detect it now, the new checksum value will not match the stored data, and the corruption will be detected as usual when the block is next read.
+   - If a write overwrites an existing range of the chunk, we must read and verify the first and last blocks of the range being overwritten, then perform the write, and finally compute and record the new checksums. 
+     - If we do not verify the first and last blocks before overwriting them partially, the new checksums may hide corruption that exists in the regions not being overwritten. 
+
+6. **What is included in the diagnostic logs?**
+
+   - GFS servers generate diagnostic logs that record many significant events (such as chunkservers going up and down) and all RPC requests and replies. 
+   - The RPC logs include the exact requests and responses sent on the wire, except for the file data being read or writ- ten. 
+
+# Experiments and results
+
 
 
 
