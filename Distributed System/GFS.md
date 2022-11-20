@@ -3,9 +3,9 @@
    * [Overview](#overview)
       * [Architecture](#architecture)
       * [Consistency](#consistency)
-      * [Write and record append](#write-and-record-append)
    * [Data mutation](#data-mutation)
       * [Control &amp; data flow](#control--data-flow)
+      * [Write and record append](#write-and-record-append)
       * [Atomic record appends](#atomic-record-appends)
       * [Snapshot](#snapshot)
    * [Master](#master)
@@ -13,6 +13,7 @@
       * [Replica management](#replica-management)
       * [Deletion](#deletion)
    * [Fault tolerance](#fault-tolerance)
+   * [Other parts (unmentioned)](#other-parts-unmentioned)
 * [Experiments and results](#experiments-and-results)
    * [Micro-benchmarks](#micro-benchmarks)
       * [Read](#read)
@@ -89,23 +90,6 @@
    - This window is limited by the cache entry's timeout and dthe next open of the file. 
    - As most of files are append-only, a stale replica usually returns a premature end of chunk rather than outdated data. 
 
-### Write and record append
-
-1. **What is the difference between write and record append?**
-   - A write causes data to be written at an application-specified file offset. 
-   - A record append causes data (the “record”) to be appended atomically at least once even in the presence of concurrent mutations, but at an offset of GFS’s choosing. 
-     - The offset is returned to the client and marks the beginning of a defined region that contains the record. 
-     - GFS may insert padding or record duplicates in between. They occupy regions considered to be inconsistent and are typically dwarfed by the amount of user data. 
-   - A “regular” append is merely a write at an offset that the client believes to be the current end of file. 
-2. **How does typical writing happen?**
-   - A writer generates a file from beginning to end. It atomically renames the file to a permanent name after writing all the data, or periodically checkpoints how much has been successfully written. 
-   - Checkpoints may also include application-level checksums. Readers verify and process only the file region up to the last checkpoint, which is known to be in the defined state. 
-   - Checkpointing allows writers to restart incrementally and keeps readers from processing successfully written file data that is still incomplete. 
-3. **How does readers deal with occasional padding and duplicates?**
-   - Each record prepared by the writer contains extra information like checksums so that its validity can be verified. 
-   - A reader can identify and discard extra padding and record fragments using the checksums. 
-   - If it cannot tolerate the occasional duplicates, it can filter them out using unique identifiers in the records, which are often needed anyway to name corresponding application entities such as web documents. 
-
 ## Data mutation
 
 ### Control & data flow
@@ -166,6 +150,23 @@
 
    - We minimize latency by pipelining the data transfer over TCP connections. Once a chunkserver receives some data, it starts forwarding immediately. 
    - Pipelining is especially helpful to us because we use a switched network with full-duplex links. Sending the data immediately does not reduce the receive rate. 
+
+### Write and record append
+
+1. **What is the difference between write and record append?**
+   - A write causes data to be written at an application-specified file offset. 
+   - A record append causes data (the “record”) to be appended atomically at least once even in the presence of concurrent mutations, but at an offset of GFS’s choosing. 
+     - The offset is returned to the client and marks the beginning of a defined region that contains the record. 
+     - GFS may insert padding or record duplicates in between. They occupy regions considered to be inconsistent and are typically dwarfed by the amount of user data. 
+   - A “regular” append is merely a write at an offset that the client believes to be the current end of file. 
+2. **How does typical writing happen?**
+   - A writer generates a file from beginning to end. It atomically renames the file to a permanent name after writing all the data, or periodically checkpoints how much has been successfully written. 
+   - Checkpoints may also include application-level checksums. Readers verify and process only the file region up to the last checkpoint, which is known to be in the defined state. 
+   - Checkpointing allows writers to restart incrementally and keeps readers from processing successfully written file data that is still incomplete. 
+3. **How does readers deal with occasional padding and duplicates?**
+   - Each record prepared by the writer contains extra information like checksums so that its validity can be verified. 
+   - A reader can identify and discard extra padding and record fragments using the checksums. 
+   - If it cannot tolerate the occasional duplicates, it can filter them out using unique identifiers in the records, which are often needed anyway to name corresponding application entities such as web documents. 
 
 ### Atomic record appends
 
@@ -333,6 +334,25 @@
 
    - GFS servers generate diagnostic logs that record many significant events (such as chunkservers going up and down) and all RPC requests and replies. 
    - The RPC logs include the exact requests and responses sent on the wire, except for the file data being read or written. 
+
+## Other parts (unmentioned)
+
+1. **To sum up, what is the metadata of master, and where are they?**
+   - File name: this is an array of chunk handles. It is stored on disk. 
+   - Handle: it contains a list of chunkservers, version number, primary, and lease expiration. 
+     - Only the version number is stored on disk, due to the rest can be restored by asking chunkservers when master is recovered. 
+     - Given that there might have stale chunks, we cannot ask chunkservers for the version number of a chunk. 
+   - Lops and checkpoints are stored on disk. 
+2. **What is the cause of split brain? How to solve it?**
+   - Split brain is caused by network partition, the master cannot talk to primary while the primary can talk to clients. Hence the master mistakingly designates two primary for the same chunk. 
+   - The master knowswhen the lease will expire, so when the master cannot talk to the primary, it will wait until the lease expired before assign another primary. 
+3. **Why GFS doesn't overwrite those failed records immediately, but leaving padding and duplicates?**
+   - Because When it starts to write the next record, it may not know the fate of prior record. 
+4. **GFS is a weak consistency system, how can we upgrade it to a strong consistency system?**
+   - Primary detects duplicate requests to ensure the failed write doesn't show up twice
+   - When primary asks a secondary to do something, the secondary actually does it and doesn't just return error (except the secondary has a permanent damage, in which case, it should be removed)
+   - The secondary doesn't expose data to readers until the primary is sure that all the secondaries really will be execute the append. 
+   - When primary crashes, there will have been some last set of operations that primary had launched to the secondaries, but primary crashed before ensure all operations are done. The new primary need to explicitly resync with all secondaries. 
 
 # Experiments and results
 
