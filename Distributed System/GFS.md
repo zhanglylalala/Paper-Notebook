@@ -42,7 +42,7 @@
 
 ### Architecture
 
-<img src="imgs/GFS/01.png" style="zoom:33%;" />
+<img src="../imgs/GFS/01.png" style="zoom:33%;" />
 
 1. **What does the system consist of?**
     - Consist of a signle *master* and multiple *chunkservers* and is accessed by multiple *clients*. 
@@ -133,7 +133,7 @@
    - In step 6, the secondaries all reply to the primary indicating that they have completed the operation. 
    - In step 7, the primary replies to the client. Any errors encountered at any of the replicas are reported to the client. 
 
-   <img src="imgs/GFS/02.png" style="zoom:25%;" />
+   <img src="../imgs/GFS/02.png" style="zoom:25%;" />
 
 4. **How does primary and secondary servers write data?**
 
@@ -340,7 +340,7 @@
 
 The author first tested several micro-benchmarks, i.e. reads, writes, and record appends. These tests are that $N$ clients do those operation simultaneously. For reading, they read from the file system; for writing, they write to distinct files; for appending, they append to a single file. And test the aggregate throughputs of the system, comparing them with the network limit. The results are as following: 
 
-![](imgs/GFS/03.png)
+![](../imgs/GFS/03.png)
 
 ### Read
 
@@ -368,7 +368,7 @@ The chunkserver network congestion in our experiment is not a significant issue 
 
 The author also measured the performance of real world clusters. First, the author measured their storage usage and size of metadata. Then, the read rate, write rate and the rate of operations sent to the master were measured. The results show that master can easily keep up with this rate, and therefore is not a bottleneck for these workloads. 
 
-<img src="imgs/GFS/04.png" style="zoom: 33%;" /><img src="imgs/GFS/05.png" style="zoom: 31%;" />
+<img src="../imgs/GFS/04.png" style="zoom: 33%;" /><img src="../imgs/GFS/05.png" style="zoom: 31%;" />
 
 After a chunkserver fails, some chunks will become underreplicated and must be cloned to restore their replication levels. To test the recovery time, the author killed a single chunkserver containing 15000 chunks of 600 GB data. 
 
@@ -376,7 +376,7 @@ To limit the impact on running applications and provide leeway for scheduling de
 
 Finally, the author also measured the workload of chunkserver and master, and breakdown the workload of chunkserver by size and same of master by type. The table 4 shows the distribution of operations by size, and the table 5 shows the total amount of data transferred in operations of various size. 
 
-<img src="imgs/GFS/06.png" style="zoom:25%;" /><img src="imgs/GFS/07.png" style="zoom:25%;" /><img src="imgs/GFS/08.png" style="zoom: 31%;" />
+<img src="../imgs/GFS/06.png" style="zoom:25%;" /><img src="../imgs/GFS/07.png" style="zoom:25%;" /><img src="../imgs/GFS/08.png" style="zoom: 31%;" />
 
 
 
