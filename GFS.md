@@ -1,4 +1,24 @@
-[toc]
+* [Purpose](#purpose)
+* [Model](#model)
+   * [Overview](#overview)
+      * [Architecture](#architecture)
+      * [Consistency](#consistency)
+      * [Write and record append](#write-and-record-append)
+   * [Data mutation](#data-mutation)
+      * [Control &amp; data flow](#control--data-flow)
+      * [Atomic record appends](#atomic-record-appends)
+      * [Snapshot](#snapshot)
+   * [Master](#master)
+      * [Basic operations](#basic-operations)
+      * [Replica management](#replica-management)
+      * [Deletion](#deletion)
+   * [Fault tolerance](#fault-tolerance)
+* [Experiments and results](#experiments-and-results)
+   * [Micro-benchmarks](#micro-benchmarks)
+      * [Read](#read)
+      * [Write](#write)
+      * [Record append](#record-append)
+   * [Real world clusters](#real-world-clusters)
 
 # Purpose
 
@@ -79,7 +99,7 @@
    - A “regular” append is merely a write at an offset that the client believes to be the current end of file. 
 2. **How does typical writing happen?**
    - A writer generates a file from beginning to end. It atomically renames the file to a permanent name after writing all the data, or periodically checkpoints how much has been successfully written. 
-   - Checkpoints may also include application-level check- sums. Readers verify and process only the file region up to the last checkpoint, which is known to be in the defined state. 
+   - Checkpoints may also include application-level checksums. Readers verify and process only the file region up to the last checkpoint, which is known to be in the defined state. 
    - Checkpointing allows writers to restart incrementally and keeps readers from processing successfully written file data that is still incomplete. 
 3. **How does readers deal with occasional padding and duplicates?**
    - Each record prepared by the writer contains extra information like checksums so that its validity can be verified. 
@@ -109,9 +129,9 @@
    - In step 2, the master replies with the identity of the primary and the locations of the other (secondary) replicas. 
    - In step 3, The client pushes the data to all the replicas in any order, instead of only sending to the lease. 
    - In step 4, once all the replicas have acknowledged receiving the data, the client sends a write request to the primary. 
-   - In step 5, the primary forwards the write request to all sec- ondary replicas. 
+   - In step 5, the primary forwards the write request to all secondary replicas. 
    - In step 6, the secondaries all reply to the primary indicating that they have completed the operation. 
-   - In step 7, the primary replies to the client. Any errors encoun- tered at any of the replicas are reported to the client. 
+   - In step 7, the primary replies to the client. Any errors encountered at any of the replicas are reported to the client. 
 
    <img src="imgs/GFS/02.png" style="zoom:25%;" />
 
@@ -144,7 +164,7 @@
 
 8. **How to minimize latency of pushing data?**
 
-   - We minimize latency by pipelining the data trans- fer over TCP connections. Once a chunkserver receives some data, it starts forwarding immediately. 
+   - We minimize latency by pipelining the data transfer over TCP connections. Once a chunkserver receives some data, it starts forwarding immediately. 
    - Pipelining is especially helpful to us because we use a switched network with full-duplex links. Sending the data immediately does not reduce the receive rate. 
 
 ### Atomic record appends
@@ -220,20 +240,20 @@
 ### Replica management
 
 1. **How to place replicas?**
-   - There are two purposes: maximize data reliability and availability, and maximize net- work bandwidth utilization. 
+   - There are two purposes: maximize data reliability and availability, and maximize network bandwidth utilization. 
    - It is not enough to spread replicas across machines, which only guards against disk or machine failures and fully utilizes each machine’s network bandwidth. 
-   - We must also spread chunk replicas across racks. This ensures that some replicas of a chunk will survive and remain available even if an entire rack is damaged or offline. It also means that traffic, especially reads, for a chunk can exploit the aggre- gate bandwidth of multiple racks. 
+   - We must also spread chunk replicas across racks. This ensures that some replicas of a chunk will survive and remain available even if an entire rack is damaged or offline. It also means that traffic, especially reads, for a chunk can exploit the aggregate bandwidth of multiple racks. 
    - On the other hand, write traffic has to flow through multiple racks, a tradeoff we make willingly. 
    - An even safer way is to spread across data centers in different cities. It can guards against a city-level catastrophe. 
 2. **What factors are considered when create a new chunk?**
    - We want to place new replicas on chunkservers with below-average disk space utilization. Over time this will equalize disk utilization across chunkservers. 
-   - We want to limit the number of “recent” creations on each chunkserver. Although creation itself is cheap, it reliably predicts immi- nent heavy write traffic because chunks are created when de- manded by writes. 
+   - We want to limit the number of “recent” creations on each chunkserver. Although creation itself is cheap, it reliably predicts imminent heavy write traffic because chunks are created when demanded by writes. 
    - We want to spread replicas of a chunk across racks. 
 3. **What if the number of available replicas of a chunk falls below a user-specified goal?**
    - The master would re-replicate the chunk. 
    - If there are many chunks below their goal, the master picks the highest priority chunk considering some factors and “clones” it by instructing some chunkserver to copy the chunk data directly from an existing valid replica. 
      - How far it is from its replication goal. 
-     - Prefer to first re-replicate chunks for live files as opposed to chunks that belong to re- cently deleted files. 
+     - Prefer to first re-replicate chunks for live files as opposed to chunks that belong to recently deleted files. 
      - To minimize the impact of failures on running applications, we boost the priority of any chunk that is blocking client progress. 
 4. **What if cloning traffic from overwhelming client traffic?**
    - The master limits the numbers of active clone operations both for the cluster and for each chunkserver. 
@@ -260,11 +280,11 @@
    - The delay sometimes hinders user effort to fine tune usage when storage is tight. 
    - Applications that repeatedly create and delete temporary files may not be able to reuse the storage right away. 
 3. **How to address the issues of reusing?**
-   - Expediting storage recla- mation if a deleted file is explicitly deleted again. 
+   - Expediting storage reclamation if a deleted file is explicitly deleted again. 
    - Allow users to apply different replication and reclamation policies to different parts of the namespace. 
 4. **How to handle the possible stale replicas?**
    - For each chunk, the master maintains a chunk version number to distinguish between up-to-date and stale replicas. 
-   - Whenever the master grants a new lease on a chunk, it increases the chunk version number and informs the up-to- date replicas. This occurs before any client is notified and therefore before it can start writing to the chunk. 
+   - Whenever the master grants a new lease on a chunk, it increases the chunk version number and informs the up-to-date replicas. This occurs before any client is notified and therefore before it can start writing to the chunk. 
    - If one replica is currently unavailable, its chunk version number will not be advanced. The master will detect that this chunkserver has a stale replica when the chunkserver restarts and reports its set of chunks and their associated version numbers. 
    - The master removes stale replicas in its regular garbage collection. Before that, it effectively considers a stale replica not to exist at all when it replies to client requests for chunk information. 
    - The master includes the chunk version number when it informs clients which chunkserver holds a lease on a chunk or when it instructs a chunkserver to read the chunk from another chunkserver in a cloning operation. 
@@ -279,18 +299,18 @@
      - Clients use only the canonical name of the master, which is a DNS alias that can be changed if the master is relocated to another machine.
    - “Shadow” masters provide read-only access to the file system even when the primary master is down. 
      - They enhance read availability for files that are not being actively mutated or applications that do not mind getting slightly stale results. 
-     - Since file content is read from chunkservers, appli- cations do not observe stale file content. What could be stale within short windows is file metadata. 
+     - Since file content is read from chunkservers, applications do not observe stale file content. What could be stale within short windows is file metadata. 
      - To keep itself informed, a shadow master reads a replica of the growing operation log and applies the same sequence of changes to its data structures exactly as the primary does.
      - It depends on the primary master only for replica location updates resulting from the primary’s decisions to create and delete replicas.
 
 2. **Why cannot recover data using other chunk replicas? Why each chunkserver must independently verify the integrity?**
 
    - It would be impractical to detect corruption by comparing replicas across chunkservers. 
-   - Divergent replicas may be legal: the semantics of GFS mutations, in particular atomic record append, does not guar- antee identical replicas. 
+   - Divergent replicas may be legal: the semantics of GFS mutations, in particular atomic record append, does not guarantee identical replicas. 
 
 3. **How to ensure data integrity?**
 
-   - Each chunkserver uses checksumming to detect corruption of stored data. A chunk is broken up into 64 KB blocks. Each has a corre- sponding 32 bit checksum. 
+   - Each chunkserver uses checksumming to detect corruption of stored data. A chunk is broken up into 64 KB blocks. Each has a corresponding 32 bit checksum. 
    - Checksums are kept in memory and stored persistently with logging, separate from user data. 
    - During idle periods, chunkservers can scan and verify the contents of inactive chunks. 
 
@@ -304,7 +324,7 @@
 
 5. **How to write data with checksum?**
 
-   - For writes that append to the end of a chunk, we just incrementally update the check- sum for the last partial checksum block, and compute new checksums for any brand new checksum blocks filled by the append. 
+   - For writes that append to the end of a chunk, we just incrementally update the checksum for the last partial checksum block, and compute new checksums for any brand new checksum blocks filled by the append. 
      - Even if the last partial checksum block is already corrupted and we fail to detect it now, the new checksum value will not match the stored data, and the corruption will be detected as usual when the block is next read.
    - If a write overwrites an existing range of the chunk, we must read and verify the first and last blocks of the range being overwritten, then perform the write, and finally compute and record the new checksums. 
      - If we do not verify the first and last blocks before overwriting them partially, the new checksums may hide corruption that exists in the regions not being overwritten. 
@@ -312,11 +332,51 @@
 6. **What is included in the diagnostic logs?**
 
    - GFS servers generate diagnostic logs that record many significant events (such as chunkservers going up and down) and all RPC requests and replies. 
-   - The RPC logs include the exact requests and responses sent on the wire, except for the file data being read or writ- ten. 
+   - The RPC logs include the exact requests and responses sent on the wire, except for the file data being read or written. 
 
 # Experiments and results
 
+## Micro-benchmarks
 
+The author first tested several micro-benchmarks, i.e. reads, writes, and record appends. These tests are that $N$ clients do those operation simultaneously. For reading, they read from the file system; for writing, they write to distinct files; for appending, they append to a single file. And test the aggregate throughputs of the system, comparing them with the network limit. The results are as following: 
+
+![](imgs/GFS/03.png)
+
+### Read
+
+The reading efficiency drops because as the number of readers increases, so does the probability that multiple readers simultaneously read from the same chunkserver. 
+
+### Write
+
+The limit plateaus of write rate at 67 MB/s because we need to write each byte to 3 of the 16 chunkservers, each with a 12.5 MB/s input connection. 
+
+The main culprit for a low write rate with only one client is the network stack. It does not interact very well with the pipelining scheme we use for pushing data to chunk replicas. Delays in propagating data from one replica to another reduce the overall write rate. 
+
+As the number of clients grows, it becomes more likely that multiple clients write concurrently to the same chunkserver as the number of clients increases. Moreover, collision is more likely for 16 writers than for 16 readers because each write involves three different replicas. 
+
+Writes are slower than we would like. In practice this has not been a major problem because even though it increases the latencies as seen by individual clients, it does not significantly affect the aggregate write bandwidth delivered by the system to a large number of clients. 
+
+### Record append
+
+The performance of record appends is limited by the network bandwidth of the chunkservers that store the last chunk of the file, independent of the number of clients. 
+
+The append rate drops mostly due to congestion and variances in network transfer rates seen by different clients. 
+
+The chunkserver network congestion in our experiment is not a significant issue in practice because a client can make progress on writing one file while the chunkservers for another file are busy. 
+
+## Real world clusters
+
+The author also measured the performance of real world clusters. First, the author measured their storage usage and size of metadata. Then, the read rate, write rate and the rate of operations sent to the master were measured. The results show that master can easily keep up with this rate, and therefore is not a bottleneck for these workloads. 
+
+<img src="imgs/GFS/04.png" style="zoom: 33%;" /><img src="imgs/GFS/05.png" style="zoom: 31%;" />
+
+After a chunkserver fails, some chunks will become underreplicated and must be cloned to restore their replication levels. To test the recovery time, the author killed a single chunkserver containing 15000 chunks of 600 GB data. 
+
+To limit the impact on running applications and provide leeway for scheduling decisions, our default parameters limit this cluster to 91 concurrent clonings (40% of the number of chunkservers) where each clone operation is allowed to consume at most 6.25 MB/s (50 Mbps). All chunks were restored in 23.2 minutes, at an effective replication rate of 440 MB/s. 
+
+Finally, the author also measured the workload of chunkserver and master, and breakdown the workload of chunkserver by size and same of master by type. The table 4 shows the distribution of operations by size, and the table 5 shows the total amount of data transferred in operations of various size. 
+
+<img src="imgs/GFS/06.png" style="zoom:25%;" /><img src="imgs/GFS/07.png" style="zoom:25%;" /><img src="imgs/GFS/08.png" style="zoom: 31%;" />
 
 
 
