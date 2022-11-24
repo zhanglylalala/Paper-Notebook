@@ -85,7 +85,58 @@
 
 ## Implementation
 
+### Starting and restarting
 
+1. **What requirements need to be satisfied by the startup mechanism?**
+   - We also want to use it to restart a backup VM after a failure. Hence, this mechanism must be usable for a running primary VM that is in an arbitrary state. 
+   - We would prefer that the mechanism does not significantly disrupt that execution of the primary VM. 
+2. **How to implement the startup mechanism?**
+   - VMware FT adapted a modified VMware VMotion that allows the migration of a running VM from one server to another server with minimal disruption. However, after migration, the VMotion will destroy the local VM. 
+   - The FT VMotion clones a VM to a remote host rather than migrating it without destroying the local VM. 
+   - The FT VMotion also sets up a logging channel, and causes the source VM to enter logging mode as the primary, and the destination VM to enter replay mode as the new backup. 
+3. **How to choose a server on which to run the backup VM?**
+   - The primary Vm informs the clustering service that it needs a new backup. 
+   - The clustering service determines the best server on which to run the backup VM based on resource usage and other constraints and invokes an FT VMotion to create the new backup VM. 
+   - VMware FT typically can re-establish VM redundancy within minutes of a server failure, all without any noticeable interruption in the execution of a fault-tolerant VM. 
+
+### Logging channel
+
+1. **How to control primary sending log entries, and backup receiving entries?**
+   - The hypervisors maintain a large buffer for logging entries for the primary and backup VMs. 
+   - The contents of the primary's log buffer are flushed out to the logging channel as soon as possible, and log entries are read into the backup's log buffer from the logging channel as soon as they arrive. 
+   - The backup sends acknowledgments back to the primary each time that it reads some log entries from the network into its log buffer. 
+2. **What if the log buffer of the primary is full?**
+   - It must stop execution until log entries can be flushed out. 
+   - This stop in execution is a natural flow-control mechanism that slows down the primary VM when it is producing log entries at too fast a rate. 
+   - This pause can affect clients of the VM, and we must minimize the possibility that the primary log buffer fills up. 
+3. **What is the main cause of the buffer of primary being full?**
+   - One biggest reason is that the backup VM is executing too slowly and therefore sonsuming log entries too slowly. 
+   - In general, the backup VM must be able to replay an execution at roughly the same speed as sthe primary VM is recording the execution. 
+   - The overhead of recording and replaying in VMware deterministic replay is roughly the same. 
+   - If the server hosting the backup VM is heavily loaded with other VMs (and hence overcommitted on resources), the backup VM may not be able to get enough CPU and memory resources to execute as fast as the primary VM. 
+4. **How to prevent the backup VM from getting too far behind the primary?**
+   - When sending acknowledgments, we also send additional information to determine the real-time execution lag between the primary and backup VMs. 
+   - Typically the execution lag is less than 100 milliseconds. 
+   - If the backup VM starts having a significant execution lag (e.g. more than 1 second), VMware FT starts slowing down the primary VM by informing the scheduler to give it a slightly smally amount of CPU. 
+   - Such slowdowns are very rare, and typically happen only when the system is under extreme stress. 
+
+### Special operations
+
+1. **How to deal with control operations?**
+   - Most control operations shouls be applied to both machines. 
+     - If the primary VM is explicitly powered off, the backup VM should be stopped as well, and not attempt to go live. 
+     - Any resource management change on the primary should be applied to the backup. 
+   - The only operation that can be done independently on the primary and backup VMs is VMotion. 
+     - The primary and backup VMs can be VMotioned independently to other hosts. 
+     - VMware FT ensures that neither VM is moved to the server where the other VM is. 
+2. **How to implement the VMotion for primary and backup VMs?**
+   - For a normal VMotion, it requires that all outstanding disk IOs be quiesced just as the final switchover on the VMotion occurs. 
+   - For a primary VM, 
+     - The quiescing is easily handled by waiting until the physical IOs completeand delivering these completions to the VM. 
+     - The backup VM must disconnect from the source primary and re-connect to the destination primary at the appropriate time. 
+   - For a backup VM, 
+     - There is no easy way to cause all IOs to be completed at any required point, since the backup VM must replay the primary VM's execution and complete IOs at the same execution point. 
+     - When a backup VM is at the final switchover point for a VMotion, it requests via the logging channel that the primary VM temporarily quiesce all its IOs. 
 
 
 
