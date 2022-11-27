@@ -397,18 +397,3 @@ To limit the impact on running applications and provide leeway for scheduling de
 Finally, the author also measured the workload of chunkserver and master, and breakdown the workload of chunkserver by size and same of master by type. The table 4 shows the distribution of operations by size, and the table 5 shows the total amount of data transferred in operations of various size. 
 
 <img src="../imgs/GFS/06.png" style="zoom:25%;" /><img src="../imgs/GFS/07.png" style="zoom:25%;" /><img src="../imgs/GFS/08.png" style="zoom: 31%;" />
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
