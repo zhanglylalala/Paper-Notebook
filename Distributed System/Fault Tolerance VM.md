@@ -61,6 +61,13 @@
 3. **Will the Output Rule affect VM, e.g. stop its execution?**
    - It does not say anything about stopping the execution of the primary VM. We need only delay the sending of the output, but the VM itself can continue execution. 
    - Since operating systems do non-blocking network and disk outputs with asynchronous interrupts to indicate completion, the VM can easily continue execution and will not necessarily be immediately affected by the delay in the output. 
+4. **What is the subtleties of executing disk reads on the backup VM?**
+   - By default, the primary VM will send the results of the disk read to the backup VM via the logging channel. 
+   - Executing disk read on the backup VM can greatly reduce the traffic on the logging channel for workloads that do a lot of disk reads. It may also slow down the backup VM's execution. 
+   - Some extra work must be done to deal with failed disk read operations. 
+     - If the primary succeeds while the backup fails, the backup needs to keep retrying until succeess. 
+     - If the backup succeeds while the primary fails, the contents of the target memory must be sent to the backup via the logging channel, since the contents of memory will be undetermined and not necessarily replicated by a successful disk read by the backup VM. 
+   - If the primary VM does a read to a particular disk location followed fairly soon by a write to the same disk location, then the disk write must be delayed until the backup VM has executed the first disk read. 
 
 ### Detecting and responding to failure
 
@@ -82,6 +89,23 @@
    - When either a primary or backup VM wants to go live, it executes an atomic test-and-set operation on the shared virtual disk. 
    - If the operation succeeds, the VM is allowed to go live. 
    - If the operation fails, then the other VM must have already gone live, so the current VM actually halts itself ("commits suicide"). 
+
+### Alternative: Non-shared disk
+
+1. **What is the difference between non-shared disk and shared disk?**
+   - In shared disk, any write to the shared disk is considered a communication to external world. Writes to the shared disk must be delayed. 
+   - In non-shared disk, the virtual disks are essentially considered part of the internal state of each VM. Disk writes of the primary do not have to be delayed according to the Output Rule. 
+2. **In what case non-shared disk will be useful?**
+   - Shared storage is not accessible to the primary and backup VMs. 
+   - This may be the case because shared storage is unavailable or too expensive, or because the servers running the primary and backup VMs are far apart. 
+3. **What is the disadvantage of non-shared disk?**
+   - The two copies of the virtual disks must be explicitly synced up in some manner when fault tolerance is first enabled. 
+   - The disks can get out of sync after a failure, so they must be explicitly resynced when the backup VM is restarted after a failure. 
+4. **How to solve the split-brain situation?**
+   - There may be no shared storage to use for dealing with it. The system could use some other external tiebreaker. 
+     - A third-party server that both servers can talk to. 
+   - If the servers are part of a cluster with more than two nodes, the system could alternatively use a majority algorithm. 
+     - A VM would only be allowed to go live if it is running on a server that is part of a communication sub-cluster that contains a majority of the original nodes. 
 
 ## Implementation
 
@@ -138,9 +162,47 @@
      - There is no easy way to cause all IOs to be completed at any required point, since the backup VM must replay the primary VM's execution and complete IOs at the same execution point. 
      - When a backup VM is at the final switchover point for a VMotion, it requests via the logging channel that the primary VM temporarily quiesce all its IOs. 
 
+### Issues for disk IOs
 
+1. **How many kind of races may occur?**
+   - The first kind is caused by several IO operations. 
+     - One reason is that disk operations are non-blocking and can execute in parallel. Simultaneous disk operations access the same disk location causing races. 
+     - The other reason is that DMA directly to/from the memory of the VM. Simultaneous disk operations access the same memory pages. 
+   - The second kind is caused by IO operations and non-IO operations. 
+     - The disk operations directly access the memory of a VM via DMA. Hence a disk operation accesses the same memory pages as an aplication or OS in a VM causing races. 
+2. **How to solve the non-determinism caused by several IO operations?**
+   - We should detect any such IO races, and force such racing disk operations to execute sequentially in the same way on the primary and backup. 
+3. **How to solve the non-determinism caused by IO operations and application/OS?**
+   - We need to set up page protection termporarily on pages that are targets of disk operations. 
+   - The page protections result in a trap if the VM happens to make an access to a page that is also the target of an outstanding disk operation, and the VM can be paused until the disk operation completes. 
+   - Changing MMU protections on pages is expensive, we use bounce buffers. 
+     - A bounce buffer is a temporary buffer that has the same size as the memory being accessed by a disk operation. 
+     - A disk read operation is modified to read the specified data to the bounce buffer, and the data is copied to guest memory only as the IO completion is delivered. 
+     - For a disk write operation, the data to besent is first copied to the bounce buffer, and the disk write is modified to write data from the bounce buffer. 
+   - The bounce buffer can slow down disk operations, but noticeable performance loss is not seen. 
+4. **How the newly-promoted primary VM handle those outstanding IOs?**
+   - There is no way for the newly-promoted primary VM to be sure if the disk IOs were issued to the disk or completed  successfully. 
+   - We could send an error completion that indicates that each IO failed, since it is acceptable to return an error even if the IO completed successfully. However, the guest OS might not respond well to errors from its local disk. 
+   - We can re-issue the pending IOs during the go-live process of the backup VM. Because we have eliminated all races and all IOs specify derectly which memory and disk blocks are accessed, these disk operations can be re-issued even if they have already completed successfully. 
 
+### Issues for network IO
 
+1. **How to solve the non-determinism caused by asynchronous updates?**
+   - In normal VM, the hypervisor asynchronously updating the state of the virtual machine's network device. 
+   - For FT
+     - The code that asynchronously updates VM ring buffers with incoming packets has been modified to force the guest to trap to the hypervisor, where it can log the updates and then apply them to the VM. 
+     - The code that normally pull packets out of transmit queues asynchronously is diabled, and instead transmits are done through a trap to the hypervisor. 
+2. **How can we optimize the network performance while running FT? **
+   - Reduce VM trapand interrupts with clustering optimizations. 
+     - When the VM is streaming data at a sufficient bit rate, the hypervisor can do one transmit trap per group of packets and, in the best case, zero traps, since it can transmit the packets as part of receiving new packets. 
+     - The hypervisor can reduce the number of interrupts to the VM for incoming packets by only posting the interrupt for a group of packets. 
+   - Reduce the delay for transmitted packets. 
+     - The key is to reduce the time required to send a log message to the backup and get an acknowledgment. 
+     - It is ensured that sending and receiving log entries and acknowledgments can all be done without any thread context switch. 
+     - The VMware vSphere hypervisor allows functions to be registered with the TCP stack that will be called from a deferred-execution context (similar to a tasklet in Linux) whenever TCP data is received. 
+     - When the primary VM enqueues a packet to be transmitted, we force an immediate log flush of the associated output log entry by scheduling a defferred-execution context to do the flush. 
+
+# Experiments and results
 
 
 
