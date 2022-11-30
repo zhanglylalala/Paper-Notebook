@@ -1,3 +1,18 @@
+* [Purpose](#purpose)
+* [Model](#model)
+   * [FT design](#ft-design)
+      * [Primary-backup structure](#primary-backup-structure)
+      * [FT protocol](#ft-protocol)
+      * [Detecting and responding to failure](#detecting-and-responding-to-failure)
+      * [Alternative: Non-shared disk](#alternative-non-shared-disk)
+   * [Implementation](#implementation)
+      * [Starting and restarting](#starting-and-restarting)
+      * [Logging channel](#logging-channel)
+      * [Special operations](#special-operations)
+      * [Issues for disk IOs](#issues-for-disk-ios)
+      * [Issues for network IO](#issues-for-network-io)
+* [Experiments and results](#experiments-and-results)
+
 # Purpose
 
 1. Contribution
