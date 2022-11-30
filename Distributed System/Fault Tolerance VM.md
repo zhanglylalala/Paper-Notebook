@@ -204,7 +204,15 @@
 
 # Experiments and results
 
+One important banchmark is the performance ratio between non-FT and FT systems and logging bandwidth between primary and backup. The performance ratio can show how efficient the FT protocol is, and logging bandwidth is usually a bottleneck of the system. The author measured them all as the following table. We can see that FT protocol only decreases the performance by less than 10%
 
+<img src="../imgs/FTVM/02.png" style="zoom:30%;" />
+
+The typical idle logging bandwidth is 0.5-1.5 Mbits/sec. The idle bandwidth is largely the result of recording the delivery of timer interrupts. For a VM with an active workload, the logging bandwidth is dominated by the network and disk inputs that must be sent to the backup - the network packets that are received and the disk blocks that are read from disk. Hence the logging bandwidth can be much higher than those measured in table for applications that have very high network receive or disk read bandwidth. For these kinds of applications, the bandwidth of the logging channel could be a bottleneck. 
+
+The author also measured the bandwidth of logging channels with different capacities, as shown below. When FT is enabled for receive workloads, the loging bandwidth is very large, since all incomming network packets must be sent on the logging channel. When FT is enabled for transmit workloads, the logging bandwidth is much lower. Overall, FT can limit network bandwidths significantly at very high transmit and receive rates, but high absolute rates are still achievable. 
+
+<img src="../imgs/FTVM/03.png" style="zoom:30%;" />
 
 
 
