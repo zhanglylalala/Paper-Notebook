@@ -38,7 +38,7 @@
    - The backup server is always available to take over is the primary server fails. 
      - The problem is that the state of the backup server must be kept nearly identical to the primary server at all times. We say that the two VMs are in virtual lock-step. 
 
-   - One way is to ship shcanges to all state of the primary. The bandwidth needed to send can be very large. 
+   - One way is to ship changes to all state of the primary. The bandwidth needed to send can be very large. 
    - Another method is the state-machine approach. 
      - The idea is to model the servers as deterministic state machcines that are kept in sync by starting them from the same initial state and ensuring that they receive the same input requests in the same order. 
      - Some operations are not deterministic. Extra coordination must be used to ensure that they receive a primary and backup are kept in sync. 
