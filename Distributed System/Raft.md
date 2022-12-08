@@ -18,24 +18,24 @@
    - First electing a distin- guished leader, then giving the leader complete responsi- bility for managing the replicated log. 
    - The leader accepts log entries from clients, replicates them on other servers, and tells servers when it is safe to apply log entries to their state machines. 
    - A leader can fail or be- come disconnected from the other servers, in which case a new leader is elected.
-
 2. **What are the states of each server?**
    - At any given time each server is in one of three states: leader, follower, or candidate. 
    - In normal operation there is exactly one leader and all of the other servers are followers. 
    - Followers are passive: they issue no requests on their own but simply respond to requests from leaders and candidates. 
    - The leader handles all client requests. If a client contacts a follower, the follower redirects it to the leader. 
    - The candidate is used to elect a new leader. 
-
 3. **How to divide the terms?**
    - Terms are numbered with consecutive integers. Each election begins a new term. 
    - If an election results in a split vote, the term will end with no leader; a new term with a new election will begin shortly. 
    - Terms act as a logical clock in Raft, and they allow servers to detect obsolete information such as stale leaders. 
-
 4. **How does terms change?**
    - Each server stores a current term number, which increases monotonically over time. 
    - Current terms are exchanged whenever servers communicate; if one server’s current term is smaller than the other’s, then it updates its current term to the larger value. 
    - If a candidate or leader discovers that its term is out of date, it immediately reverts to fol- lower state. 
    - If a server receives a request with a stale term number, it rejects the request. 
+5. **How does Raft handle follower and candidate crashes?**
+   - If a follower or candidate crashes, then fu- ture RequestVote and AppendEntries RPCs sent to it will fail. Raft handles these failures by retrying indefinitely. 
+   - If a server crashes after completing an RPC but before responding, then it will receive the same RPC again after it restarts. Raft RPCs are idempotent, i.e. servers will ignore the RPCs that is already handled, so this causes no harm. 
 
 ### States stored on servers
 
@@ -90,6 +90,22 @@
    - Raft uses randomized election timeouts to ensure that split votes are rare and that they are resolved quickly. 
      - Election timeouts are chosen randomly from a fixed interval at the start of an election, and it waits for that timeout to elapse before starting the next election. 
      - In most cases only a single server will time out; it wins the election and sends heartbeats before any other servers time out. 
+
+6. **How to ensure that the leader of any given term contains all of the entries committed in previous terms?**
+
+   - A candidate must contact a majority of the cluster in order to be elected, which means that every committed entry must be present in at least one of those servers. 
+   - If the candidate’s log is at least as up-to-date as any other log in that majority， then it will hold all the committed entries. 
+   - In the RequestVote RPC, the voter denies its vote if its own log is more up-to-date than that of the candidate. 
+   - Raft determines which of two logs is more up-to-date by comparing the index and term of the last entries in the logs. 
+     - If the logs have last entries with different terms, then the log with the later term is more up-to-date. 
+     - If the logs end with the same term, then whichever log is longer is more up-to-date. 
+
+7. **What is the limitation of broadcast time and election timeout?**
+
+   - $broadcastTime\ll electionTimeout\ll MTBF$
+   - BbroadcastTime is the average time it takes a server to send RPCs in parallel to every server in the cluster and receive their responses. electionTime- out is the election timeout. MTBF is the average time between failures for a single server. 
+   - The broadcast time should be an order of mag- nitude less than the election timeout so that leaders can reliably send the heartbeat messages required to keep fol- lowers from starting elections. 
+   - The election timeout should be a few orders of magnitude less than MTBF so that the sys- tem makes steady progress. 
 
 ### RequestVote RPC
 
@@ -151,4 +167,41 @@
    - Leader crashes can leave the logs inconsistent. The old leader may not have fully replicated all of the entries in its log. 
    - A follower may be missing entries that are present on the leader, it may have extra entries that are not present on the leader, or both. 
 
-7. 
+7.  **How does leader handle follower inconsistencies?**
+
+   - **Leader Append-Only** property: a leader never overwrites or deletes entries in its log. 
+   - The leader handles inconsistencies by forcing the followers' logs to duplicate its own. Namely, conflicting entries in follower logs will be overwritten with entries from the leader's log. 
+   - The leader must find the latest log entry where the two logs agree, delete any entries in the follower’s log after that point, and send the follower all of the leader’s entries after that point. 
+   - All of these actions happen in response to the consistency check performed by AppendEntries RPCs. 
+   - A leader does not need to take any special actions to restore log consistency when it comes to power. It just begins normal operation, and the logs auto- matically converge in response to failures of the Append- Entries consistency check. 
+
+8. **How does AppendEntries RPC perform consistency check?**
+
+   - The leader maintains a nextIndex for each follower. When a leader first comes to power, it initializes all nextIndex values to the index just after the last one in its log, i.e. assuming all followers are as up-to-date as itself. 
+   - If a follower’s log is inconsistent with the leader’s, the AppendEntries consis- tency check will fail in the next AppendEntries RPC. 
+   - Af- ter a rejection, the leader decrements nextIndex and retries the AppendEntries RPC. 
+   - Eventually nextIndex will reach a point where the leader and follower logs match. When this happens, AppendEntries will succeed, which removes any conflicting entries in the follower’s log and appends entries from the leader’s log (if any). 
+   - Once AppendEntries succeeds, the follower’s log is consistent with the leader’s, and it will remain that way for the rest of the term. 
+
+9. **How to handle uncommited entries from previous leaders?**
+
+   - If a leader crashes be- fore committing an entry, future leaders will attempt to finish replicating the entry. 
+   - A leader cannot im- mediately conclude that an entry from a previous term is committed once it is stored on a majority of servers. 
+   - Raft never commits log entries from previous terms by count- ing replicas. 
+   - Only log entries from the leader’s current term are committed by counting replicas; once an entry from the current term has been committed in this way, then all prior entries are committed indirectly because of the Log Matching Property. 
+
+## Log compation
+
+1. 
+
+## Reproduce and unmentioned parts
+
+1. **How to optimize the consistency check protocol?**
+   - Additional AppenEntries RPC results for fast roll back:
+     - ``Xterm``: the term of the conflicting entry. 
+     - ``Xindex``: the first index that is in ``Xterm``. 
+     - ``Xlen``: the length of log
+   - Fast roll back implementation: 
+     -  If the leader doesn't have ``Xterm``, then every entries of ``Xterm`` in follower's log will causing conflict. Hence the ``nextIndex`` can backup to ``Xindex``. 
+     - If the leader has ``Xterm``, the matching entry in leader's log must have a term no larger than ``Xterm``. Hence, the ``nextIndex`` should backup to the next entry of the last ``Xterm`` in leader's log. 
+     - If the follower's conflicting is due to empty in ``prevLogTerm``, then ``Xterm`` is set to $-1$, and leader should backup to ``Xlen``. 
