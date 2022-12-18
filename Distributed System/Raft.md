@@ -109,7 +109,7 @@
 
 ### RequestVote RPC
 
-1. This is invoked by candidates to gather votes
+1. This is invoked by candidates to gather votes. 
 2. Arguments: 
    - ``term``: candidate's term
    - ``candidateId``: candidate requesting vote
@@ -119,7 +119,7 @@
    - ``term``: currentTerm, for candidate to update itself
    - ``voteGranted``: true means candidate received vote
 4. Receiver implementation:
-   - Reply ``false`` if term < currentTerm
+   - Reply ``false`` if ``term < currentTerm``
    - If votedFor is ``null`` or ``candidateId``, and candidate's log is at least as up-to-date as receiver's log, grant vote
 
 ## Log replication
@@ -190,9 +190,106 @@
    - Raft never commits log entries from previous terms by count- ing replicas. 
    - Only log entries from the leader’s current term are committed by counting replicas; once an entry from the current term has been committed in this way, then all prior entries are committed indirectly because of the Log Matching Property. 
 
-## Log compation
+### AppendEntries RPC
 
-1. 
+1. This is invoked by leader to replicate log entries; also used as heartbeat. 
+2. Arguments: 
+   - ``term``: leader's term
+   - ``leaderId``: so follower can redirect clients
+   - ``prevLogIndex``: index of log entry immediately preceding new ones. 
+   - ``prevLogTerm``: term of ``prevLogIndex`` entry
+   - ``entries[]``: log entries to store (empty for hearbeat; may send more than one for efficiency)
+   - ``leaderCommit``: leader's ``commitIndex``
+3. Results:
+   - ``term``: ``currentTerm``, for leader to update itself
+   - ``success``: true if follower contrained entry matching ``prevLogIndex`` and ``prevLogTerm``
+4. Receiver implementation:
+   - Reply ``false`` if ``term < currentTerm``
+   - Reply ``false`` if log doesn't contrain an entry at ``prevLogIndex`` whose term matches ``prevLogTerm``
+   - If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it. 
+   - Append any new entries not already in the log. 
+   - If ``leaderCommit > commitIndex``, set ``commitIndex = min(leaderCommit, index of last new entry)``. 
+
+## Log compaction
+
+1. **How does Raft compact logs?**
+   - In snapshotting, the entire current system state is written to a snapshot on stable storage. 
+   - Once a server completes writing a snapshot, it may delete all log entries up through the last included index, as well as any prior snapshot.
+   - Each server takes snapshots independently, covering just the committed entries in its log. 
+   - Data still only flows from leaders to followers, just followers can now reorganize their data. 
+2. **How to handle the first AppendEntries following the snapshot?**
+   - Raft also includes a small amount of metadata in the snapshot. 
+   - The ``last included index`` is the index of the last entry in the log that the snapshot replaces (the last en- try the state machine had applied). 
+   - The ``last included term`` is the term of this entry. 
+3. **When will leader send its snapshot to followers?**
+   - When the leader has already discarded the next log entry that it needs to send to a follower. 
+   - This situation is unlikely in normal operation: a follower that has kept up with the leader would already have this entry. 
+   - However, an excep- tionally slow follower or a new server joining the cluster would not. 
+4. **How to install the snapshot from leader?**
+   - The leader uses a new RPC called InstallSnapshot to send snapshots to followers that are too far behind. 
+   - When a follower receives a snapshot with this RPC, it must decide what to do with its existing log en- tries. 
+   - If the snapshot contains new information not already in the recipient’s log
+     - The follower discards its entire log
+     - It is all superseded by the snapshot and may possibly have uncommitted entries that conflict with the snapshot. 
+   - If instead the follower receives a snap- shot that describes a prefix of its log
+     - This could be due to retransmis- sion or by mistake. 
+     - Log entries covered by the snap- shot are deleted but entries following the snapshot are still valid and must be retained. 
+5. **When should a server to snapshot?**
+   - If a server snapshots too often, it wastes disk bandwidth and energy; if it snapshots too infrequently, it risks exhaust- ing its storage capacity, and it increases the time required to replay the log during restarts. 
+   - One simple strategy is to take a snapshot when the log reaches a fixed size in bytes. 
+   - If this size is set to be significantly larger than the expected size of a snapshot, then the disk bandwidth over- head for snapshotting will be small.
+6. **How to reduce the delays of normal operations caused by a snapshot?**
+   - The solution is to use copy-on-write techniques so that new updates can be accepted without impacting the snapshot being writ- ten. 
+   - The operat- ing system’s copy-on-write support (e.g., fork on Linux) can be used to create an in-memory snapshot of the entire state machine. 
+
+### InstallSnapshot RPC
+
+1. This is invoked by leader to send chunks of snapshot to a follower. Leaders always send chunks in order. 
+2. Arguments:
+   - ``term``: leader's term
+   - ``leaderId``: so follower can redirect clients
+   - ``lastIncludedIndex``: the snapshot replaces all entries up through and including this index
+   - ``lastIncludedTerm``: term of ``lastIncludedIndex``
+   - ``offset``: byte offset where chunk is positioned in the snapshot file
+     - The whole snapshot file may be large, and hence divided into several chunks. 
+   - ``data[]``: raw bytes of the snapshot chunk, starting at offset
+   - ``done``: ``true`` if this is the last chunk
+3. Results:
+   - ``term``: ``currentTerm``, for leader to update itself
+4. Receiver implementation:
+   - Reply immediately if ``term < currentTerm``
+   - Create new snapshot file if first chunk (offset is 0)
+   - Write data into snapshot file at given offset
+   - Reply and wait for more data chunks if done is ``false``. 
+   - Save snapshot file, discard any existing or partial snapshot with smaller index
+   - If existing log entry has same index and term as snapshot's last included entry, retain log entries following it and reply
+   - Discard the entire log
+   - Reset state machine using snapshot contents (and load snapshot's cluster configuration)
+
+## Client interaction
+
+1. **How does client find cluster leader?**
+   - When a client first starts up
+     - It connects to a randomly- chosen server. 
+     - If the client’s first choice is not the leader, that server will reject the client’s request and supply in- formation about the most recent leader it has heard from. 
+   - If the leader crashes
+     - Client requests will time out. 
+     - Clients then try again with randomly-chosen servers. 
+2. **How to prevent Raft execute a command multiple times?**
+   - Our goal for Raft is to implement linearizable seman- tics, i.e. each operation appears to execute instantaneously, exactly once, at some point between its invocation and its response. 
+     - One case of executing a command multiple times is that if the leader crashes after committing the log entry but before respond- ing to the client, the client will retry the command with a new leader, causing it to be executed a second time. 
+   - The solution is for clients to assign unique serial numbers to every command. 
+   - Then, the state machine tracks the latest serial number processed for each client, along with the as- sociated response. 
+   - If it receives a command whose serial number has already been executed, it responds immedi- ately without re-executing the request. 
+3. **How to prevent returning stale date to a read-only operation?**
+   - The reason for stale reading is that the leader responding to the request might have been su- perseded by a newer leader of which it is unaware. 
+   - A leader must have the latest information on which entries are committed. 
+     - The Leader Completeness Property guarantees that a leader has all committed en- tries, but at the start of its term, it may not know which those are. 
+     - To find out, it needs to commit an entry from its term. 
+     - Raft handles this by having each leader com- mit a blank *no-op* entry into the log at the start of its term. 
+   - A leader must check whether it has been de- posed before processing a read-only request, since its informa- tion may be stale if a more recent leader has been elected). 
+     - Raft handles this by having the leader exchange heart- beat messages with a majority of the cluster before re- sponding to read-only requests. 
+     - Alternatively, the leader could rely on the heartbeat mechanism to provide a form of lease, but this would rely on timing for safety (it assumes bounded clock skew). 
 
 ## Reproduce and unmentioned parts
 
@@ -205,3 +302,15 @@
      -  If the leader doesn't have ``Xterm``, then every entries of ``Xterm`` in follower's log will causing conflict. Hence the ``nextIndex`` can backup to ``Xindex``. 
      - If the leader has ``Xterm``, the matching entry in leader's log must have a term no larger than ``Xterm``. Hence, the ``nextIndex`` should backup to the next entry of the last ``Xterm`` in leader's log. 
      - If the follower's conflicting is due to empty in ``prevLogTerm``, then ``Xterm`` is set to $-1$, and leader should backup to ``Xlen``. 
+
+# Experiements and results
+
+1. The main goal of Raft is to propose a consensus algorithm which is easier to understand than Paxos. Hence the author measured the understandability of this model through scores of learning students. 
+2. A most important measure of a new system is its correctness. The author proved the correctness of Raft with a formal specification. 
+3. Finally, the author also measured the performance of Raft, which is similar to other consensus algorithms. 
+4. The election timeout will effect the performance of the system through the performance of leader election. Hence, the author measured how will the randomization and base election timeout effect the performance. 
+   - A small amount of randomization in the election timeout is enough to avoid split votes in elections. Using more randomness improves worst-case behavior. 
+   - Downtime can be reduced by reducing the election timeout. 
+     - However, lowering the timeouts beyond 12 - 14 ms violates Raft’s timing requirement: leaders have difficulty broad- casting heartbeats before other servers start new elections. This can cause unnecessary leader changes and lower overall system availability. 
+     - The author recommends using a con- servative election timeout such as 150–300ms; such time- outs are unlikely to cause unnecessary leader changes and will still provide good availability. 
+   - <img src="../imgs/Raft/02.png" style="zoom:33%;" />
